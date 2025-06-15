@@ -1,0 +1,14 @@
+[gd_scene load_steps=3 format=3 uid="uid://c6tb3qa1y4c4f"]
+
+[ext_resource type="Script" uid="uid://dv5veclkg2dxh" path="res://Shared/Scripts/Player.cs" id="1_tpla8"]
+
+[sub_resource type="SceneReplicationConfig" id="SceneReplicationConfig_tpla8"]
+properties/0/path = NodePath(".:peerId")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+
+[node name="Player" type="Node"]
+script = ExtResource("1_tpla8")
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
+replication_config = SubResource("SceneReplicationConfig_tpla8")

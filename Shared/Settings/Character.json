@@ -1,0 +1,5 @@
+{
+	"Friction": 10.0,
+	"Speed": 500,
+	"MaxBufferSize": 1024
+}
