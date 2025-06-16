@@ -1,39 +1,33 @@
-using Godot;
 using System;
-using System.Dynamic;
 
 public struct RingBuffer<T>
 {
-    private T[] buffer;
     private readonly int capacity;
-    private int amount;
-
+    private T[] buffer;
     public RingBuffer(int capacity)
     {
-        amount = 0;
-        buffer = new T[capacity];
         this.capacity = capacity;
+        buffer = new T[capacity];
     }
 
-    public void Add(T item)
+    // Associa um valor a um tick
+    public void Set(int tick, T value)
     {
-        buffer[amount % capacity] = item;
-        amount += 1;
+        int index = tick % capacity;
+        buffer[index] = value;
     }
 
-    public void Set(int index, T item)
+    // Retorna o valor de um tick, se existir
+    public T Get(int tick)
     {
-        buffer[index % capacity] = item;
-    }
-
-    public T Get(int index)
-    {
-        return buffer[index % capacity];
+        int index = tick % capacity;
+        return buffer[index];
     }
 
     public void Clear()
     {
-        amount = 0;
         buffer = new T[capacity];
     }
+
+    public int Capacity => capacity;
 }

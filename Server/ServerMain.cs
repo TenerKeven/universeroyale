@@ -11,7 +11,7 @@ public partial class ServerMain : Node
         Vector2 windowSize = DisplayServer.WindowGetSize();
 
         DisplayServer.WindowSetTitle("Servidor");
-        DisplayServer.WindowSetPosition((Vector2I)new Vector2(screenSize.X - windowSize.X, (screenSize.Y - windowSize.Y) / 2));
+        DisplayServer.WindowSetPosition((Vector2I)new Vector2(screenSize.X - windowSize.X, 0));
 
         playerHandler = new PlayerHandler();
 

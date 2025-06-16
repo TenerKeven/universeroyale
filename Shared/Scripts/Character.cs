@@ -11,13 +11,14 @@ public partial class Character : CharacterBody3D
     protected RingBuffer<TransformState> transformStates;
     protected RingBuffer<InputState> inputStates;
     protected Queue<InputState> inputsQueue;
+    protected Queue<TransformState> statesQueue;
     protected CharacterSettings characterSettings;
     protected bool initialized = false;
     protected double characterStarted;
     protected float ticksTime;
     protected int currentTick;
-    protected int lastTickInputChecked;
     protected InputState lastInputState;
+    protected TransformState lastServerState;
 
     public Player Player
     {
@@ -26,8 +27,8 @@ public partial class Character : CharacterBody3D
 
     public void Initialize(Player player)
     {
+        currentTick = 0;
         inputsQueue = new Queue<InputState>();
-        lastTickInputChecked = -1;
         initialized = true;
         ticksTime = 1.0F / Main.worldSettings.TickRate;
         characterSettings = JSONReader<CharacterSettings>.DeserializeFile("res://Shared/Settings/Character.json");
@@ -62,7 +63,13 @@ public partial class Character : CharacterBody3D
     {
         if (!initialized) return;
 
-        SimulateEverything((float) delta, currentTick, false);
+        if (!Multiplayer.IsServer() && lastServerState.Processed)
+        {
+            Reconciliation(lastServerState);
+            lastServerState.Processed = false;
+        }
+
+        SimulateEverything((float)delta, currentTick, false);
 
         currentTick++;
     }
@@ -127,22 +134,18 @@ public partial class Character : CharacterBody3D
         {
             if (inputsQueue.Count == 0)
             {
-                lastTickInputChecked = -1;
                 inputStates.Set(tick, lastInputState);
                 SimulateMovement(delta, tick);
             }
             else
             {
-                while (inputsQueue.Count > 0)
-                {
-                    InputState currentState = inputsQueue.Dequeue();
-                    lastInputState = currentState;
+                InputState currentState = inputsQueue.Dequeue();
+                lastInputState = currentState;
 
-                    inputStates.Set(tick, currentState);
-                    SimulateMovement(delta, tick);
+                inputStates.Set(tick, currentState);
+                SimulateMovement(delta, tick);
 
-                    clientsToReconciliating.Add(currentState.PeerId, currentState.Tick);
-                }
+                clientsToReconciliating.Add(currentState.PeerId, currentState.Tick);
             }
         }
 
@@ -194,9 +197,11 @@ public partial class Character : CharacterBody3D
         TransformState clientState = transformStates.Get(serverState.Tick);
         float diferenceFromServer = serverState.Position.DistanceTo(clientState.Position);
 
+        GD.Print("client reconciliation " + serverState.Tick);
+
         if (diferenceFromServer >= 0.01f)
         {
-            GD.Print(diferenceFromServer);
+            GD.Print("Difference studs from server is ", diferenceFromServer);
             GlobalPosition = serverState.Position;
             Velocity = serverState.Velocity;
 
@@ -227,7 +232,7 @@ public partial class Character : CharacterBody3D
     //Client received the message from server to reconciliate
     [Rpc(MultiplayerApi.RpcMode.AnyPeer, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
     public void LocalClientReconciliation(Dictionary transformDictionary) {
-        Reconciliation(TransformState.ToStruct(transformDictionary));
+        lastServerState = TransformState.ToStruct(transformDictionary);
     }
 
     //Server send for the client character current position / when it started move, just happens when the character spawn first time
@@ -246,6 +251,8 @@ public partial class Character : CharacterBody3D
         InputState newInputState = InputState.ToStruct(inputDictionary);
 
         newInputState.PeerId = Multiplayer.GetRemoteSenderId();
+
+        GD.Print("clint sending ", newInputState.Tick);
 
         inputsQueue.Enqueue(newInputState);
     }

@@ -12,7 +12,7 @@ public partial class ClientMain : Node
         Vector2 windowSize = DisplayServer.WindowGetSize();
 
         DisplayServer.WindowSetTitle("Cliente");
-        DisplayServer.WindowSetPosition((Vector2I)new Vector2(0, (screenSize.Y - windowSize.Y) / 2));
+        DisplayServer.WindowSetPosition((Vector2I)new Vector2(0, 0));
 
         playerHandler = new PlayerHandler();
 
