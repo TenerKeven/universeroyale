@@ -9,9 +9,11 @@ public partial class Main : Node
     public static Node CharactersNode;
     public static Node MainNode;
     public static WorldSettings worldSettings;
+    public static double StartedTime;
 
     public override void _Ready()
     {
+        StartedTime = Time.GetTicksMsec();
         PlayersNode = GetNode<Node>("Players");
         CharactersNode = GetNode<Node>("Characters");
         MainNode = GetTree().Root.GetChild(0);

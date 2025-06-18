@@ -7,6 +7,7 @@ public struct InputState
     public int Tick { get; set; }
     public Vector2 InputDirection { get; set; }
     public long PeerId { get; set; }
+    public bool Jumped { get; set; }
 
     public Dictionary ToDictionary()
     {
@@ -14,7 +15,8 @@ public struct InputState
         {
             {"Tick", Tick},
             {"InputDirection", InputDirection},
-            {"PeerId", PeerId}
+            {"PeerId", PeerId},
+            {"Jumped", Jumped}
         };
     }
 
@@ -24,7 +26,8 @@ public struct InputState
         {
             Tick = (int)dictionary["Tick"],
             InputDirection = (Vector2)dictionary["InputDirection"],
-            PeerId = (long)dictionary["PeerId"]
+            PeerId = (long)dictionary["PeerId"],
+            Jumped = (bool)dictionary["Jumped"]
         };
     }
 }

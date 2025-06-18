@@ -7,7 +7,7 @@ public struct TransformState
     public int Tick { get; set; }
     public Vector3 Position { get; set; }
     public Vector3 Velocity { get; set; }
-    public bool Processed { get; set; }
+    public double TimeStamp { get; set; }
 
     public Dictionary ToDictionary()
     {
@@ -16,7 +16,7 @@ public struct TransformState
             {"Tick", Tick},
             {"Position", Position},
             {"Velocity", Velocity},
-            {"Processed", Processed}
+            {"TimeStamp", TimeStamp}
         };
     }
 
@@ -27,7 +27,7 @@ public struct TransformState
             Tick = (int)dictionary["Tick"],
             Position = (Vector3)dictionary["Position"],
             Velocity = (Vector3)dictionary["Velocity"],
-            Processed = (bool)dictionary["Processed"]
+            TimeStamp = (double)dictionary["TimeStamp"]
         };
     }
 }

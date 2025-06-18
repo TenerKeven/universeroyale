@@ -2,187 +2,100 @@ using Godot;
 using Godot.Collections;
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Linq.Expressions;
+using System.Threading.Tasks;
 
 public partial class Character : CharacterBody3D
 {
-    [Export]
     protected Player player;
+    protected CharacterSettings characterSettings;
+    protected TimeSynchronized synchronized;
     protected RingBuffer<TransformState> transformStates;
     protected RingBuffer<InputState> inputStates;
-    protected Queue<InputState> inputsQueue;
-    protected Queue<TransformState> statesQueue;
-    protected CharacterSettings characterSettings;
-    protected bool initialized = false;
-    protected double characterStarted;
-    protected float ticksTime;
-    protected int currentTick;
+    protected Queue<long> playersToUpdateStartData;
+    protected Queue<InputState> clientInputStates;
+    protected TransformState spawnStateFromServer;
+    protected TransformState lastServerSentState;
+    protected TransformState lastServerProcessedState;
     protected InputState lastInputState;
-    protected TransformState lastServerState;
+    protected bool reconciliatePlayer;
+    protected bool spawnReconciliated = false;
+    protected bool initialized;
+    protected float tickTime;
+    protected int currentTick;
+    protected float time;
+    protected bool stop;
 
-    public Player Player
+    public virtual void Initialize(Player player)
     {
-        get { return player; }
-    }
-
-    public void Initialize(Player player)
-    {
-        currentTick = 0;
-        inputsQueue = new Queue<InputState>();
-        initialized = true;
-        ticksTime = 1.0F / Main.worldSettings.TickRate;
-        characterSettings = JSONReader<CharacterSettings>.DeserializeFile("res://Shared/Settings/Character.json");
-        transformStates = new(characterSettings.MaxBufferSize);
-        inputStates = new(characterSettings.MaxBufferSize);
-        characterStarted = Time.GetUnixTimeFromSystem();
-
+        reconciliatePlayer = false;
         lastInputState = new InputState
         {
             InputDirection = new Vector2(0, 0),
-            Tick = currentTick
+            Tick = currentTick,
+            PeerId = player.PeerId
+
         };
+        playersToUpdateStartData = new Queue<long>();
+        clientInputStates = new Queue<InputState>();
+        synchronized = new TimeSynchronized();
+        currentTick = 0;
+        this.player = player;
+        GlobalPosition = new Vector3(0, 8, 0);
+        characterSettings = JSONReader<CharacterSettings>.DeserializeFile("res://Shared/Settings/Character.json");
+        inputStates = new(characterSettings.MaxBufferSize);
+        transformStates = new(characterSettings.MaxBufferSize);
+        tickTime = 1f / Main.worldSettings.TickRate;
+        initialized = true;
+        synchronized.startedTime = Time.GetTicksMsec();
+
+        transformStates.Set(currentTick, new TransformState
+        {
+            Tick = currentTick,
+            Position = GlobalPosition,
+            Velocity = Velocity,
+            TimeStamp = synchronized.startedTime
+        });
 
         inputStates.Set(currentTick, lastInputState);
-
-        this.player = player;
 
         SetPhysicsProcess(true);
     }
 
     public override void _Ready()
     {
-        GlobalPosition = new Vector3(0, 10, 0);
-
         if (!Multiplayer.IsServer())
         {
-            RpcId(1, nameof(RequestedStartInfos));
+            RpcId(1, nameof(RequestServerStartInfos));
         }
+    }
+
+    public override void _Process(double delta)
+    {
+        if (stop) return;
+        if (!initialized) return;
+        time += (float)delta;
     }
 
     public override void _PhysicsProcess(double delta)
     {
+        if (stop) return;
         if (!initialized) return;
 
-        if (!Multiplayer.IsServer() && lastServerState.Processed)
+        while (time >= tickTime)
         {
-            Reconciliation(lastServerState);
-            lastServerState.Processed = false;
-        }
-
-        SimulateEverything((float)delta, currentTick, false);
-
-        currentTick++;
-    }
-
-    //this just happens once, when the character is spawned
-    public virtual void SpawnReconciliation(TransformState serverState, double latency)
-    {
-        if (serverState.Processed)
-        {
-            GlobalPosition = serverState.Position;
-            Velocity = serverState.Velocity;
-
-            transformStates.Set(currentTick, new TransformState
-            {
-                Tick = currentTick,
-                Position = GlobalPosition,
-                Velocity = Velocity,
-                Processed = true
-            });
-        }
-
-        int tickAmounts = Convert.ToInt32((float)latency / ticksTime);
-        int count = 0;
-
-        while (count <= tickAmounts)
-        {
-            SimulateEverything(ticksTime, currentTick, true);
+            time -= tickTime;
             currentTick++;
-            count++;
-        }
-    }
 
-    public virtual void SimulateEverything(float delta, int tick, bool reconciling)
-    {
-        SimulateGravity(delta, tick);
-
-        Godot.Collections.Dictionary<long,int> clientsToReconciliating = new Godot.Collections.Dictionary<long, int>();
-
-        if (!Multiplayer.IsServer())
-        {
-            if (!reconciling)
+            if (Multiplayer.IsServer())
             {
-                Vector2 inputDirection = Input.GetVector("move_left", "move_right", "move_forward", "move_backward");
-                InputState newInputState = new InputState
-                {
-                    InputDirection = inputDirection,
-                    Tick = tick
-                };
-
-                if (newInputState.InputDirection != lastInputState.InputDirection)
-                {
-                    RpcId(1, nameof(ClientInputReceived), newInputState.ToDictionary());
-                }
-
-                lastInputState = newInputState;
-            }
-
-            inputStates.Set(tick, lastInputState);
-            SimulateMovement(delta, tick);
-        }
-        else
-        {
-            if (inputsQueue.Count == 0)
-            {
-                inputStates.Set(tick, lastInputState);
-                SimulateMovement(delta, tick);
+                ServerTick(tickTime, currentTick);
             }
             else
             {
-                InputState currentState = inputsQueue.Dequeue();
-                lastInputState = currentState;
-
-                inputStates.Set(tick, currentState);
-                SimulateMovement(delta, tick);
-
-                clientsToReconciliating.Add(currentState.PeerId, currentState.Tick);
+                ClientTick(tickTime, currentTick, false);
             }
         }
-
-        MoveAndSlide();
-
-        TransformState newState = new TransformState
-        {
-            Tick = tick,
-            Position = GlobalPosition,
-            Velocity = Velocity,
-            Processed = true
-        };
-
-        transformStates.Set(tick, newState);
-
-        if (Multiplayer.IsServer())
-        {
-            Dictionary stateDictionary = newState.ToDictionary();
-            
-            foreach (var value in clientsToReconciliating)
-            {
-                stateDictionary["Tick"] = value.Value;
-                RpcId(value.Key, nameof(LocalClientReconciliation), stateDictionary);
-            }
-        }
-    }
-
-    public virtual void SimulateMovement(float delta, int tick)
-    {
-        InputState tickInputState = inputStates.Get(tick);
-        Vector3 moveDirection = new(-tickInputState.InputDirection.X, 0, tickInputState.InputDirection.Y);
-        Vector3 currentVelocity = Velocity;
-
-        moveDirection = moveDirection.Normalized();
-        moveDirection = new Vector3(moveDirection.X * (characterSettings.Speed * delta), 0, moveDirection.Z * (characterSettings.Speed * delta));
-
-        Velocity = new Vector3(moveDirection.X, currentVelocity.Y, moveDirection.Z);
     }
 
     public virtual void SimulateGravity(float delta, int tick)
@@ -191,69 +104,202 @@ public partial class Character : CharacterBody3D
         Velocity -= gravityVector;
     }
 
-    //the reconciliation code
+    public virtual void SimulateInputs(float delta, InputState inputState)
+    {
+        Vector2 inputDirection = inputState.Equals(default(InputState)) ? lastInputState.InputDirection : inputState.InputDirection;
+        bool jumped = inputState.Equals(default(InputState)) ? lastInputState.Jumped : inputState.Jumped;
+        Vector3 moveDirection = new(-inputDirection.X, 0, inputDirection.Y);
+        Vector3 currentVelocity = Velocity;
+
+        moveDirection = moveDirection.Normalized();
+        moveDirection = new Vector3(moveDirection.X * (characterSettings.Speed * delta), jumped ? 5 : 0, moveDirection.Z * (characterSettings.Speed * delta));
+
+        Velocity = new Vector3(moveDirection.X, currentVelocity.Y + moveDirection.Y, moveDirection.Z);
+    }
+
+    public virtual void SaveTick(int tick)
+    {
+        transformStates.Set(currentTick, new TransformState
+        {
+            Tick = tick,
+            Position = GlobalPosition,
+            Velocity = Velocity,
+            TimeStamp = Time.GetTicksMsec()
+        });
+    }
+
+    public virtual void ServerTick(float delta, int tick)
+    {
+        if (clientInputStates.Count > 0)
+        {
+
+            while (clientInputStates.Count > 0)
+            {
+                InputState currentInput = clientInputStates.Dequeue();
+                lastInputState = currentInput;
+
+                SimulateGravity(tickTime, currentTick);
+                SetCurrentInput(currentTick);
+                SimulateInputs(tickTime, lastInputState);
+                MoveAndSlide();
+                SaveTick(currentTick);
+
+                if (clientInputStates.Count > 0)
+                {
+                    currentTick++;
+                }
+                
+            }
+
+            //GD.Print("Server chekignt ick is " + tickStart);
+            //GD.Print("Server current tick is " + currentTick);
+
+            RpcId(player.PeerId, nameof(ServerLastState), transformStates.Get(currentTick).ToDictionary(), lastInputState.Tick);
+
+            return;
+        }
+
+        SimulateGravity(delta, tick);
+        SetCurrentInput(tick);
+        SimulateInputs(delta, lastInputState);
+        MoveAndSlide();
+        SaveTick(tick);
+
+        while (playersToUpdateStartData.Count > 0)
+        {
+            long peerId = playersToUpdateStartData.Dequeue();
+
+            RpcId(peerId, nameof(ServerStartInfosReceived), player.GetPath(), synchronized.startedTime, transformStates.Get(tick).ToDictionary());
+        }
+    }
+
+    public virtual void ClientTick(float delta, int tick, bool reconciliating)
+    {
+        if (!spawnReconciliated && !spawnStateFromServer.Equals(default(TransformState)) && !spawnStateFromServer.Equals(lastServerProcessedState))
+        {
+            spawnReconciliated = true;
+            lastServerProcessedState = spawnStateFromServer;
+            SpawnReconciliation(lastServerProcessedState);
+            return;
+        }
+
+        if (!reconciliating && !lastServerSentState.Equals(default(TransformState)) && !lastServerSentState.Equals(lastServerProcessedState))
+        {
+            lastServerProcessedState = lastServerSentState;
+
+            Reconciliation(lastServerProcessedState);
+        }
+
+        SimulateGravity(delta, tick);
+        if (!reconciliating)
+        {
+             SetCurrentInput(tick);
+        }
+        SimulateInputs(delta, reconciliating ? inputStates.Get(tick) : lastInputState);
+        MoveAndSlide();
+        SaveTick(tick);
+    }
+
+    public virtual void SpawnReconciliation(TransformState serverTransformState)
+    {
+        float latency = (float)((synchronized.GetServerTime() - serverTransformState.TimeStamp) / 1000);
+        time = latency;
+
+        GlobalPosition = serverTransformState.Position;
+        Velocity = serverTransformState.Velocity;
+
+        SaveTick(currentTick);
+
+        while (time >= tickTime)
+        {
+            time -= tickTime;
+            currentTick++;
+            ClientTick(tickTime, currentTick, true);
+        }
+    }
+
     public virtual void Reconciliation(TransformState serverState)
     {
-        TransformState clientState = transformStates.Get(serverState.Tick);
-        float diferenceFromServer = serverState.Position.DistanceTo(clientState.Position);
+        int serverTick = serverState.Tick;
+        TransformState clientState = transformStates.Get(serverTick);
+        float distanceTo = serverState.Position.DistanceTo(clientState.Position);
 
-        GD.Print("client reconciliation " + serverState.Tick);
-
-        if (diferenceFromServer >= 0.01f)
+        if (distanceTo >= 0.01f)
         {
-            GD.Print("Difference studs from server is ", diferenceFromServer);
+            GD.Print("Server tick position is " + serverState.Position);
+            GD.Print("Server tick velocity is " + serverState.Velocity);
+
+            GD.Print("Client tick position is " + clientState.Position);
+            GD.Print("Client tick velocity is " + clientState.Velocity);
+
+            GD.Print(distanceTo);
             GlobalPosition = serverState.Position;
             Velocity = serverState.Velocity;
 
-            int count = serverState.Tick;
+            SaveTick(serverState.Tick);
 
-            while (count <= currentTick)
+            if (serverTick + 1 >= currentTick) { return; }
+
+            int count = serverTick + 1;
+
+            while (count < currentTick)
             {
-                SimulateEverything(ticksTime, count, true);
+                //GD.Print("count is " + count);
+                //GD.Print("current tick is " + currentTick);
+                ClientTick(tickTime, count, true);
                 count++;
             }
         }
     }
 
-    //Client received the start character position / when it started move
-    [Rpc(MultiplayerApi.RpcMode.AnyPeer, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
-    public void ServerStartInfos(NodePath player, double serverTime, Dictionary transformDictionary)
+    public virtual void SetCurrentInput(int tick)
     {
-        if (Multiplayer.IsServer() || Multiplayer.GetRemoteSenderId() != 1) return;
+        inputStates.Set(tick, lastInputState);
+    }
 
-        double receivedTime = Time.GetUnixTimeFromSystem();
-        double latency = receivedTime - serverTime;
+    [Rpc(MultiplayerApi.RpcMode.Authority, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    public virtual void RequestServerStartInfos()
+    {
+        playersToUpdateStartData.Enqueue(Multiplayer.GetRemoteSenderId());
+    }
 
+    [Rpc(MultiplayerApi.RpcMode.Authority, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    public virtual void ClientInput(Dictionary inputDictionary)
+    {
+        InputState clientInput = InputState.ToStruct(inputDictionary);
+
+        clientInput.PeerId = Multiplayer.GetRemoteSenderId();
+
+        clientInputStates.Enqueue(clientInput);
+    }
+
+    //ignore this
+    [Rpc(MultiplayerApi.RpcMode.Authority, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    public virtual void ServerStopPls(Dictionary serverState)
+    {
+        /*
+        TransformState newState = TransformState.ToStruct(serverState);
+
+        stop = true;
+
+        GlobalPosition = newState.Position;
+        Velocity = newState.Velocity;
+        */
+    }
+
+    [Rpc(MultiplayerApi.RpcMode.Authority, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
+    public virtual void ServerStartInfosReceived(NodePath player, double serverCharacterStartedTime, Dictionary transformDictionary)
+    {
         Initialize(GetNode(player) as Player);
 
-        SpawnReconciliation(TransformState.ToStruct(transformDictionary), latency);
+        synchronized.MakeSynchronization(serverCharacterStartedTime);
+        spawnStateFromServer = TransformState.ToStruct(transformDictionary);
     }
 
-    //Client received the message from server to reconciliate
-    [Rpc(MultiplayerApi.RpcMode.AnyPeer, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
-    public void LocalClientReconciliation(Dictionary transformDictionary) {
-        lastServerState = TransformState.ToStruct(transformDictionary);
-    }
-
-    //Server send for the client character current position / when it started move, just happens when the character spawn first time
     [Rpc(MultiplayerApi.RpcMode.Authority, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
-    public void RequestedStartInfos()
+    public virtual void ServerLastState(Dictionary transformDictionary, int tick)
     {
-        long peerId = Multiplayer.GetRemoteSenderId();
-
-        RpcId(peerId, nameof(ServerStartInfos), player.GetPath(), characterStarted, transformStates.Get(currentTick).ToDictionary());
-    }
-
-    //Client send for server the input
-    [Rpc(MultiplayerApi.RpcMode.Authority, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
-    public void ClientInputReceived(Dictionary inputDictionary)
-    {
-        InputState newInputState = InputState.ToStruct(inputDictionary);
-
-        newInputState.PeerId = Multiplayer.GetRemoteSenderId();
-
-        GD.Print("clint sending ", newInputState.Tick);
-
-        inputsQueue.Enqueue(newInputState);
+        lastServerSentState = TransformState.ToStruct(transformDictionary);
+        lastServerSentState.Tick = tick;
     }
 }

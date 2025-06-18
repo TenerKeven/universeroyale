@@ -7,7 +7,7 @@ public partial class Player : Node
     protected long peerId;
 
     [Export]
-    protected Character character;
+    protected PlayerCharacter character;
 
     public PackedScene characterScene = GD.Load<PackedScene>("res://Shared/Prefabs/Character.tscn");
 
@@ -20,12 +20,12 @@ public partial class Player : Node
     {
         if (Multiplayer.IsServer())
         {
-            Character newCharacter = (Character)characterScene.Instantiate();
+            PlayerCharacter newCharacter = (PlayerCharacter)characterScene.Instantiate();
 
             newCharacter.SetMultiplayerAuthority((int)peerId, true);
             newCharacter.Initialize(this);
             character = newCharacter;
-            
+
             Main.CharactersNode.AddChild(newCharacter);
         }
     }
@@ -34,4 +34,5 @@ public partial class Player : Node
     {
         get { return peerId; }
     }
+
 }
